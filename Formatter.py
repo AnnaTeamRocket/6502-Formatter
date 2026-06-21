@@ -1,5 +1,6 @@
 import tkinter as tk
 from tkinter import scrolledtext
+import re
 
 def process_assembly():
     input_text = text_area.get("1.0", tk.END).strip()
@@ -7,9 +8,9 @@ def process_assembly():
 
     # Define the comment mapping
     opcode_comments = {
-        "LDA": "; A = Value → N=bit7, Z",
-        "LDX": "; X = Value → N=bit7, Z",
-        "LDY": "; Y = Value → N=bit7, Z",
+        "LDA": "; A = Value → NZ",
+        "LDX": "; X = Value → NZ",
+        "LDY": "; Y = Value → NZ",
         "TAX": "; X = A",
         "TAY": "; Y = A",
         "TXA": "; A = X",
@@ -18,7 +19,7 @@ def process_assembly():
         "STX": "; X → RAM $Address",
         "STY": "; Y → RAM $Address",
         "PHA": "; A → Stack",
-        "PLA": "; A ← Stack → N=bit7, Z",
+        "PLA": "; A ← Stack → NZ",
         "INC": "; A++ → NZ",
         "INX": "; X++ → NZ",
         "INY": "; Y++ → NZ",
@@ -33,6 +34,8 @@ def process_assembly():
         "BEQ": "; JMP if Zero == 1",
         "BCC": "; JMP if Carry == 0",
         "BCS": "; JMP if Carry == 1",
+        "BVC": "; JMP if oVerflow == 0",
+        "BVS": "; JMP if oVerflow == 1",
         "ORA": "; Enable bits → NZ",
         "AND": "; Disable bits → NZ"
     }
@@ -49,7 +52,7 @@ def process_assembly():
 
     addr_to_idx = {item['addr']: i for i, item in enumerate(parsed_lines)}
     jump_targets = {int(line.split(":", 2)[2].split('$')[-1].split('=')[0].strip(), 16) 
-                    for line in lines if any(b in line for b in ['BNE', 'BEQ', 'BCC', 'BCS', 'JMP'])}
+                    for line in lines if any(b in line for b in ['BPL', 'BMI', 'BNE', 'BEQ', 'BCC', 'BCS', 'BVC', 'BVS', 'JMP'])}
 
     final_output = []
     remove_opcodes = remove_opcodes_var.get()
@@ -68,16 +71,25 @@ def process_assembly():
         else:
             cmd = raw_cmd
 
-        # 2. Handle Branching (Logic)
+        # 2. Strip assignments (=) and Indexing (@)
+        # Removes anything from '=' or '@' onwards
+        cmd = re.split(r'[=@]', cmd)[0].strip()
+        
+        # 3. Convert Hex immediate (#$xx) to Binary (#%xxxxxxxx)
+        if "#$" in cmd:
+            match = re.search(r'#\$([0-9A-Fa-f]+)', cmd)
+            if match:
+                hex_val = match.group(1)
+                binary_val = bin(int(hex_val, 16))[2:].zfill(8)
+                cmd = cmd.replace(f"#${hex_val}", f"#%{binary_val}")
+
+        # 4. Handle Branching (Logic)
         branch_mnemonic = ""
-        if any(b in cmd for b in ['BNE', 'BEQ', 'BCC', 'BCS', 'JMP']):
+        if any(b in cmd for b in ['BPL', 'BMI', 'BNE', 'BEQ', 'BCC', 'BCS', 'BVC', 'BVS', 'JMP']):
             try:
-                # Capture the mnemonic before modifying the cmd string
-                branch_mnemonic = next((b for b in ['BNE', 'BEQ', 'BCC', 'BCS', 'JMP'] if b in cmd), "")
-                
+                branch_mnemonic = next((b for b in ['BPL', 'BMI', 'BNE', 'BEQ', 'BCC', 'BCS', 'BVC', 'BVS', 'JMP'] if b in cmd), "")
                 target_addr = int(cmd.split('$')[-1].split('=')[0].strip(), 16)
                 target_idx = addr_to_idx.get(target_addr)
-                
                 if target_idx is not None:
                     direction = "forward" if target_idx > i else "backward"
                     markers = 0
@@ -85,18 +97,14 @@ def process_assembly():
                     for idx in r:
                         if parsed_lines[idx]['addr'] in jump_targets:
                             markers += 1
-                    
                     symbol = "+" if direction == "forward" else "-"
                     cmd = f"{cmd.split('$')[0].strip()} :{symbol * markers}"
             except (ValueError, IndexError): pass
 
-        # 3. Append Documentation Comment
-        # Use branch_mnemonic if set, otherwise find the first word in the cmd
+        # 5. Append Documentation Comment
         current_op = branch_mnemonic if branch_mnemonic else cmd.split()[0] if cmd.split() else ""
         if current_op in opcode_comments:
-            # Using ljust(20) to ensure consistent spacing before the comment
             cmd = f"{cmd.ljust(20)} {opcode_comments[current_op]}"
-
         final_output.append(cmd)
 
     text_area.delete("1.0", tk.END)
